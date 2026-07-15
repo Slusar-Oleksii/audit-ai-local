@@ -29,3 +29,18 @@ def test_app_smoke(monkeypatch, tmp_path: Path):
     assert len(app.file_uploader) == 1
     assert len(app.radio) == 1
     assert len(app.text_area) == 1
+    assert app.radio[0].options == [
+        "Авто",
+        "Фінансовий",
+        "Юридичний",
+        "Технічний",
+        "Універсальний",
+    ]
+    assert any(
+        button.label == "Провести аудит" and button.disabled
+        for button in app.button
+    )
+    rendered_copy = " ".join(item.value for item in app.markdown)
+    assert "Додайте документи" in rendered_copy
+    assert "Налаштуйте аудит" in rendered_copy
+    assert "Сформуйте звіт" in rendered_copy

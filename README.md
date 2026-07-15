@@ -41,7 +41,8 @@ Streamlit -> loaders/OCR -> chunking -> Ollama embeddings -> ChromaDB
 - Python 3.11.x. Ця версія є обов'язковою через Windows-сумісність локального Chroma backend.
 - Рекомендовано 16 ГБ RAM.
 - Ollama. GPU не обов'язковий, але CPU-аналіз може тривати кілька хвилин.
-- Для сканів: Tesseract, українська й англійська мовні моделі та Ghostscript.
+- Для сканів: Tesseract та українська й англійська мовні моделі. Ghostscript
+  опційний: поточний OCR pipeline використовує PDFium і `--output-type pdf`.
 
 ## Встановлення на Windows
 
@@ -51,7 +52,6 @@ Streamlit -> loaders/OCR -> chunking -> Ollama embeddings -> ChromaDB
 winget install -e --id Python.Python.3.11
 winget install -e --id Ollama.Ollama
 winget install -e --id UB-Mannheim.TesseractOCR
-winget install -e --id ArtifexSoftware.GhostScript
 ```
 
 Під час інсталяції Tesseract додайте `Ukrainian` та `English`. Після встановлення
@@ -74,6 +74,13 @@ ollama pull qwen3:8b
 ollama pull qwen3-embedding:0.6b
 python scripts\doctor.py
 streamlit run app.py
+```
+
+Після першого встановлення застосунок можна запускати однією командою; launcher
+також підніме локальний Ollama, якщо він ще не працює:
+
+```powershell
+.\scripts\start.ps1
 ```
 
 Ollama для Windows зазвичай працює у фоні. Інтерфейс Streamlit відкриється за адресою
@@ -161,7 +168,7 @@ pytest -q -m chroma_native
 
 - **Ollama не підключено:** запустіть Ollama й перевірте `http://127.0.0.1:11434/api/tags`.
 - **Модель відсутня:** виконайте відповідну команду `ollama pull`.
-- **Скан не читається:** перевірте `ocrmypdf --version`, `tesseract --list-langs` і Ghostscript.
+- **Скан не читається:** перевірте `ocrmypdf --version` і `tesseract --list-langs`.
 - **Застарілий індекс:** натисніть **Переіндексувати документи**. Оригінали повторно завантажувати не потрібно.
 - **Повільна CPU-генерація:** зменште `AUDIT_RETRIEVAL_FINAL_K` або використайте `qwen3:4b`;
   для зміни embedding-моделі обов'язково створіть нову колекцію.

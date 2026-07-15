@@ -9,6 +9,30 @@ from audit_ai.config import Settings, get_settings
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
+_OLLAMA_UNSUPPORTED_SCHEMA_KEYS = frozenset(
+    {"title", "default", "minLength", "maxLength", "minItems", "maxItems"}
+)
+
+
+def _ollama_schema(value: Any) -> Any:
+    """Keep grammar structure while leaving value constraints to Pydantic.
+
+    Ollama 0.31 on Windows rejects some otherwise valid annotation and size
+    keywords in nested schemas with ``failed to parse grammar``. Removing them
+    does not weaken the application contract because the original Pydantic
+    model validates the returned JSON immediately after generation.
+    """
+
+    if isinstance(value, dict):
+        return {
+            key: _ollama_schema(item)
+            for key, item in value.items()
+            if key not in _OLLAMA_UNSUPPORTED_SCHEMA_KEYS
+        }
+    if isinstance(value, list):
+        return [_ollama_schema(item) for item in value]
+    return value
+
 
 class LLMClient:
     def __init__(self, settings: Settings | None = None, client: object | None = None) -> None:
@@ -74,7 +98,7 @@ class LLMClient:
         *,
         temperature: float = 0.0,
     ) -> ModelT:
-        schema: dict[str, Any] = response_model.model_json_schema()
+        schema: dict[str, Any] = _ollama_schema(response_model.model_json_schema())
         kwargs: dict[str, Any] = {
             "model": self.settings.llm_model,
             "messages": messages,

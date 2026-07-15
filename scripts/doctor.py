@@ -32,6 +32,22 @@ def load_local_env() -> None:
 
 
 load_local_env()
+
+# The deployment launcher uses the same project-local language pack. Make the
+# doctor useful from a fresh PowerShell session as well, where installers may
+# not have updated PATH yet.
+if sys.platform == "win32":
+    runtime_dirs = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama",
+        Path("C:/Program Files/Tesseract-OCR"),
+    ]
+    os.environ["PATH"] = os.pathsep.join(
+        [str(path) for path in runtime_dirs if path.is_dir()] + [os.environ.get("PATH", "")]
+    )
+local_tessdata = ROOT / ".runtime" / "tessdata"
+if (local_tessdata / "ukr.traineddata").is_file():
+    os.environ["TESSDATA_PREFIX"] = str(local_tessdata)
+
 DATA_DIR = Path(os.getenv("AUDIT_DATA_DIR", ROOT / "data"))
 if not DATA_DIR.is_absolute():
     DATA_DIR = (ROOT / DATA_DIR).resolve()
@@ -56,6 +72,7 @@ def check_packages() -> bool:
         "streamlit": "streamlit",
         "chromadb": "chromadb",
         "ollama": "ollama",
+        "posthog": "posthog",
         "pydantic": "pydantic",
         "pydantic-settings": "pydantic_settings",
         "pypdf": "pypdf",
@@ -71,6 +88,15 @@ def check_packages() -> bool:
                 version_problem = f"; chromadb={installed_chroma}, потрібна 0.6.3"
         except PackageNotFoundError:
             missing.append("chromadb")
+    if "posthog" not in missing:
+        try:
+            installed_posthog = version("posthog")
+            if int(installed_posthog.split(".", 1)[0]) >= 6:
+                version_problem += (
+                    f"; posthog={installed_posthog}, потрібна версія <6 для Chroma 0.6.3"
+                )
+        except (PackageNotFoundError, ValueError):
+            missing.append("posthog")
     return line(
         not missing and not version_problem,
         "Python-залежності",
@@ -200,12 +226,11 @@ def main() -> int:
             "winget install -e --id UB-Mannheim.TesseractOCR",
         )
     )
-    checks.append(
-        executable(
-            "Ghostscript",
-            ["gswin64c", "gswin32c", "gs"],
-            "winget install -e --id ArtifexSoftware.GhostScript",
-        )
+    ghostscript = find_executable(["gswin64c", "gswin32c", "gs"])
+    line(
+        True,
+        "Ghostscript (optional)",
+        ghostscript or "not installed; OCR uses PDFium with --output-type pdf",
     )
     checks.append(tesseract_languages())
     print("\n" + ("Середовище готове." if all(checks) else "Середовище потребує налаштування."))
