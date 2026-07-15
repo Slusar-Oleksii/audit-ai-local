@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audit-ai"
+version = "0.2.0"
+description = "Локальна open-source система ШІ-аудиту документів"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = {file = "LICENSE"}
+dependencies = [
+  "charset-normalizer>=3.4,<4",
+  "chromadb==0.6.3",
+  "ocrmypdf>=16,<18",
+  "ollama>=0.4.7,<1",
+  "onnxruntime==1.20.1; sys_platform == 'win32'",
+  "posthog>=2.4,<6",
+  "pydantic>=2.10,<2.11",
+  "pydantic-settings>=2.7,<3",
+  "pypdf>=5,<7",
+  "python-docx>=1.1,<2",
+  "streamlit>=1.50,<2",
+]
+
+[project.urls]
+Homepage = "https://github.com/Slusar-Oleksii/audit-ai-local"
+Repository = "https://github.com/Slusar-Oleksii/audit-ai-local"
+Issues = "https://github.com/Slusar-Oleksii/audit-ai-local/issues"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<8",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+audit_ai = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "ollama: інтеграційні тести, що потребують локального Ollama",
+  "chroma_native: нативний persistence-тест для цільового Python 3.11",
+]
