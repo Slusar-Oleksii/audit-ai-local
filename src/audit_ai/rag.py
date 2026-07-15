@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from audit_ai.catalog import Catalog
 from audit_ai.concurrency import project_lock
@@ -10,7 +11,19 @@ from audit_ai.profiles import fallback_plan, load_prompt, profile_prompt
 from audit_ai.reporting import render_markdown, validate_citations
 from audit_ai.repository import Repository, file_checksum
 from audit_ai.retrieval import RetrievalService
-from audit_ai.schemas import AuditDraft, AuditProfile, AuditReport, AuditRequest, RetrievalPlan
+from audit_ai.schemas import (
+    AuditDraft,
+    AuditProfile,
+    AuditReport,
+    AuditRequest,
+    AuditRunManifest,
+    DocumentSnapshot,
+    RetrievalPlan,
+    SelectedChunk,
+)
+
+
+PROMPT_VERSION = "audit-prompts-v2"
 
 
 class AuditService:
@@ -147,27 +160,73 @@ class AuditService:
             for index, hit in enumerate(retrieved.hits, start=1)
         }
         draft = validate_citations(draft, retrieved.sources, source_texts)
+        report_id = str(uuid.uuid4())
+        generated_at = datetime.now(UTC)
+        manifest = AuditRunManifest(
+            report_id=report_id,
+            project_id=request.project_id,
+            generated_at=generated_at,
+            query=request.query,
+            profile=plan.profile,
+            llm_model=self.settings.llm_model,
+            embedding_model=self.settings.embedding_model,
+            prompt_version=PROMPT_VERSION,
+            index_signature=self.settings.index_signature,
+            collection_name=self.settings.collection_name,
+            retrieval_strategy="hybrid_rrf_chroma_fts5",
+            retrieval_queries=plan.queries,
+            documents=[
+                DocumentSnapshot(
+                    document_id=document.id,
+                    file_name=document.original_name,
+                    checksum=document.checksum,
+                )
+                for document in documents
+            ],
+            selected_chunks=[
+                SelectedChunk(
+                    source_id=source.source_id,
+                    chunk_id=source.chunk_id,
+                    document_id=source.document_id,
+                    retrieval_methods=source.retrieval_methods,
+                    fused_score=source.score,
+                )
+                for source in retrieved.sources
+            ],
+        )
         report = AuditReport(
             **draft.model_dump(),
-            report_id=str(uuid.uuid4()),
+            report_id=report_id,
             project_id=request.project_id,
             query=request.query,
             profile=plan.profile,
             sources=retrieved.sources,
             model=self.settings.llm_model,
+            generated_at=generated_at,
+            manifest=manifest,
         )
         markdown = render_markdown(report)
-        path = self.repository.save_report(request.project_id, report.report_id, markdown)
         try:
+            path = self.repository.save_report(request.project_id, report.report_id, markdown)
+            json_path = self.repository.save_report_json(request.project_id, report)
+            manifest_path = self.repository.save_manifest(request.project_id, manifest)
             self.catalog.add_report(
                 report.report_id,
                 request.project_id,
                 report.profile.value,
                 request.query,
                 path,
+                json_path=json_path,
+                manifest_path=manifest_path,
+                model=report.model,
+                index_signature=self.settings.index_signature,
+                created_at=report.generated_at,
             )
         except Exception:
-            path.unlink(missing_ok=True)
+            try:
+                self.repository.delete_report_artifacts(request.project_id, report.report_id)
+            except Exception:
+                pass
             raise
         return report
 

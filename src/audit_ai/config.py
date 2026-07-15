@@ -100,9 +100,13 @@ class Settings(BaseSettings):
         return self.data_dir / "catalog.sqlite3"
 
     @property
+    def lexical_path(self) -> Path:
+        return self.data_dir / "lexical.sqlite3"
+
+    @property
     def index_signature(self) -> str:
         payload = {
-            "schema": "audit-index-v2",
+            "schema": "audit-index-v3-hybrid",
             "collection": self.collection_name,
             "embedding_model": self.embedding_model,
             "chunk_size": self.chunk_size,

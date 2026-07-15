@@ -96,6 +96,14 @@ def render_markdown(report: AuditReport) -> str:
         "## Ключові висновки",
         "",
     ]
+    if report.manifest is not None:
+        lines[6:6] = [
+            f"**Пошук:** `{report.manifest.retrieval_strategy}`",
+            f"**Версія prompt:** `{report.manifest.prompt_version}`",
+            f"**Сигнатура індексу:** `{report.manifest.index_signature[:12]}`",
+            f"**Документів у знімку:** {len(report.manifest.documents)}",
+            "",
+        ]
     if not report.findings:
         lines.extend(["Підтверджених проблем у відібраному контексті не виявлено.", ""])
     for number, finding in enumerate(report.findings, start=1):
@@ -135,9 +143,10 @@ def render_markdown(report: AuditReport) -> str:
         lines.append("- Додаткових обмежень не зафіксовано.")
     lines.extend(["", "## Джерела", ""])
     for source in report.sources:
+        methods = ", ".join(source.retrieval_methods) or "retrieval"
         lines.append(
             f"- **[{source.source_id}]** `{source.file_name}` — {source.location}. "
-            f"Фрагмент: “{source.excerpt}”"
+            f"Метод: `{methods}`. Фрагмент: “{source.excerpt}”"
         )
     return sanitize_markdown_for_display("\n".join(lines).strip() + "\n")
 

@@ -12,6 +12,7 @@ from audit_ai.concurrency import project_lock
 from audit_ai.config import Settings, get_settings
 from audit_ai.embeddings import EmbeddingsClient
 from audit_ai.loaders import SUPPORTED_EXTENSIONS, load_document
+from audit_ai.lexical_store import LexicalStore
 from audit_ai.repository import Repository, file_checksum, safe_filename
 from audit_ai.schemas import DocumentChunk, IngestionItem, IngestionResult, ProjectRecord
 from audit_ai.vector_store import VectorStore
@@ -43,24 +44,33 @@ class IngestionService:
         repository: Repository | None = None,
         embeddings: EmbeddingsClient | None = None,
         vector_store: VectorStore | None = None,
+        lexical_store: LexicalStore | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.catalog = catalog or Catalog(self.settings)
         self.repository = repository or Repository(self.settings)
         self.embeddings = embeddings
         self.vector_store = vector_store
+        self.lexical_store = lexical_store
 
-    def _dependencies(self) -> tuple[EmbeddingsClient, VectorStore]:
+    def _dependencies(self) -> tuple[EmbeddingsClient, VectorStore, LexicalStore]:
         if self.embeddings is None:
             self.embeddings = EmbeddingsClient(self.settings)
         if self.vector_store is None:
             self.vector_store = VectorStore(self.settings)
-        return self.embeddings, self.vector_store
+        if self.lexical_store is None:
+            self.lexical_store = LexicalStore(self.settings)
+        return self.embeddings, self.vector_store, self.lexical_store
 
     def _vector_store(self) -> VectorStore:
         if self.vector_store is None:
             self.vector_store = VectorStore(self.settings)
         return self.vector_store
+
+    def _lexical_store(self) -> LexicalStore:
+        if self.lexical_store is None:
+            self.lexical_store = LexicalStore(self.settings)
+        return self.lexical_store
 
     def create_project(self, name: str) -> ProjectRecord:
         project = self.catalog.create_project(name)
@@ -182,9 +192,10 @@ class IngestionService:
         document_id = str(uuid.uuid4())
         stored_path: Path | None = None
         vector_store: VectorStore | None = None
+        lexical_store: LexicalStore | None = None
         try:
             stored_path = self.repository.store_document(project_id, document_id, path, original_name)
-            embeddings, vector_store = self._dependencies()
+            embeddings, vector_store, lexical_store = self._dependencies()
             chunks, vectors, used_ocr = self._prepare_document(
                 project_id=project_id,
                 document_id=document_id,
@@ -195,6 +206,7 @@ class IngestionService:
                 embeddings=embeddings,
             )
             vector_store.upsert(chunks, vectors)
+            lexical_store.upsert(chunks)
             self.catalog.add_document(
                 document_id=document_id,
                 project_id=project_id,
@@ -222,6 +234,11 @@ class IngestionService:
                     vector_store.delete_document(project_id, document_id)
                 except Exception as exc:
                     rollback_errors.append(f"вектори: {exc}")
+            if lexical_store is not None:
+                try:
+                    lexical_store.delete_document(project_id, document_id)
+                except Exception as exc:
+                    rollback_errors.append(f"лексичний індекс: {exc}")
             if stored_path is not None:
                 try:
                     self.repository.delete_document_files(project_id, document_id)
@@ -241,9 +258,10 @@ class IngestionService:
             documents = self.catalog.list_documents(project_id)
             if not documents:
                 return result
-            embeddings, vector_store = self._dependencies()
+            embeddings, vector_store, lexical_store = self._dependencies()
             for record in documents:
                 extension = f".{record.file_type.lower().lstrip('.')}"
+                index_mutated = False
                 try:
                     self.catalog.update_document_status(record.id, "reindexing")
                     stored_path = self.repository.validate_document_path(
@@ -267,13 +285,17 @@ class IngestionService:
                     old_collection = record.collection_name or self.settings.collection_name
                     if old_collection == self.settings.collection_name:
                         vector_store.delete_document(project_id, record.id)
+                        index_mutated = True
                         vector_store.upsert(chunks, vectors)
                     else:
                         vector_store.upsert(chunks, vectors)
+                        index_mutated = True
                         if hasattr(vector_store, "delete_document_from_collection"):
                             vector_store.delete_document_from_collection(
                                 old_collection, project_id, record.id
                             )
+                    lexical_store.delete_document(project_id, record.id)
+                    lexical_store.upsert(chunks)
                     self.catalog.update_document_index(
                         record.id,
                         chunk_count=len(chunks),
@@ -291,6 +313,15 @@ class IngestionService:
                         )
                     )
                 except Exception as exc:
+                    if index_mutated:
+                        try:
+                            vector_store.delete_document(project_id, record.id)
+                        except Exception:
+                            pass
+                        try:
+                            lexical_store.delete_document(project_id, record.id)
+                        except Exception:
+                            pass
                     try:
                         self.catalog.update_document_status(record.id, "reindex_error")
                     except Exception:
@@ -311,6 +342,7 @@ class IngestionService:
             if record is None or record.project_id != project_id:
                 raise ValueError("Документ не знайдено в цьому проєкті")
             vector_store = self._vector_store()
+            lexical_store = self._lexical_store()
             collection_name = record.collection_name or self.settings.collection_name
             if hasattr(vector_store, "delete_document_from_collection"):
                 vector_store.delete_document_from_collection(
@@ -320,6 +352,7 @@ class IngestionService:
                     vector_store.delete_document(project_id, document_id)
             else:
                 vector_store.delete_document(project_id, document_id)
+            lexical_store.delete_document(project_id, document_id)
             self.repository.delete_document_files(project_id, document_id)
             self.catalog.delete_document(document_id)
 
@@ -329,6 +362,7 @@ class IngestionService:
                 return
             documents = self.catalog.list_documents(project_id)
             vector_store = self._vector_store()
+            lexical_store = self._lexical_store()
             collection_names = {
                 record.collection_name or self.settings.collection_name
                 for record in documents
@@ -339,6 +373,7 @@ class IngestionService:
                     vector_store.delete_project_from_collection(collection_name, project_id)
             else:
                 vector_store.delete_project(project_id)
+            lexical_store.delete_project(project_id)
             self.repository.delete_project_files(project_id)
             self.catalog.delete_project(project_id)
 

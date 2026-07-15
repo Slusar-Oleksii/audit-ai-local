@@ -66,10 +66,13 @@ class FakeRetrieval:
         source = SourceRef(
             source_id="S1",
             chunk_id=chunk.id,
+            document_id=chunk.document_id,
             file_name=chunk.file_name,
             location=chunk.location(),
             score=0.5,
             excerpt=chunk.text,
+            content=chunk.text,
+            retrieval_methods=["bm25", "vector"],
         )
         return RetrievalContext(
             hits=[hit],
@@ -115,6 +118,18 @@ def test_audit_service_saves_validated_markdown(settings, tmp_path):
     report_path = settings.projects_dir / project.id / "reports" / f"{report.report_id}.md"
     assert report_path.exists()
     assert "Розбіжність сум" in report_path.read_text(encoding="utf-8")
+    structured_path = report_path.with_suffix(".json")
+    manifest_path = report_path.with_suffix(".manifest.json")
+    assert structured_path.exists()
+    assert manifest_path.exists()
+    restored = repository.load_report(project.id, report.report_id)
+    assert restored.manifest is not None
+    assert restored.manifest.retrieval_strategy == "hybrid_rrf_chroma_fts5"
+    assert restored.manifest.documents[0].checksum == file_checksum(stored)
+    assert restored.sources[0].content.startswith("Сума у звіті")
+    history = catalog.list_reports(project.id)
+    assert [item.id for item in history] == [report.report_id]
+    assert history[0].manifest_path == manifest_path
 
 
 def test_audit_rejects_failed_reindex_before_calling_llm(settings, tmp_path):

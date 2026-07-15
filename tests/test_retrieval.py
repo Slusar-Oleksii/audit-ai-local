@@ -15,6 +15,14 @@ class FakeStore:
         return self.hits_by_call.pop(0)
 
 
+class FakeLexicalStore:
+    def __init__(self, hits_by_call):
+        self.hits_by_call = list(hits_by_call)
+
+    def query(self, project_id, query, n_results):
+        return self.hits_by_call.pop(0)
+
+
 def hit(chunk_id, rank, file_name="a.txt"):
     chunk = DocumentChunk(
         id=chunk_id,
@@ -57,3 +65,20 @@ def test_retrieval_rejects_stale_document_vectors(settings):
     )
     assert [item.chunk.id for item in result.hits] == ["current"]
     assert "stale" not in result.context
+
+
+def test_hybrid_rrf_promotes_chunk_found_by_vector_and_bm25(settings):
+    vector = FakeStore([[hit("semantic", 1), hit("hybrid", 2)]])
+    lexical = FakeLexicalStore([[hit("hybrid", 1), hit("literal", 2)]])
+    service = RetrievalService(
+        settings,
+        embeddings=FakeEmbeddings(),
+        vector_store=vector,
+        lexical_store=lexical,
+    )
+
+    result = service.search("p", ["exact amount 15000"])
+
+    assert result.hits[0].chunk.id == "hybrid"
+    assert result.sources[0].retrieval_methods == ["bm25", "vector"]
+    assert result.sources[0].content == "Evidence hybrid"

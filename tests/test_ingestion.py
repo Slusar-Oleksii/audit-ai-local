@@ -137,3 +137,34 @@ def test_create_project_rolls_back_catalog_and_partial_directory(settings):
 
     assert catalog.list_projects() == []
     assert list(settings.projects_dir.iterdir()) == []
+
+
+def test_ingestion_rolls_back_vectors_when_lexical_index_fails(settings, tmp_path: Path):
+    class FailingLexicalStore:
+        def upsert(self, chunks):
+            raise OSError("simulated FTS failure")
+
+        def delete_document(self, project_id, document_id):
+            return None
+
+    catalog = Catalog(settings)
+    vector = FakeVectorStore()
+    service = IngestionService(
+        settings,
+        catalog=catalog,
+        repository=Repository(settings),
+        embeddings=FakeEmbeddings(),
+        vector_store=vector,
+        lexical_store=FailingLexicalStore(),
+    )
+    project = service.create_project("Rollback")
+    source = tmp_path / "facts.txt"
+    source.write_text("Суттєвий факт для індексації.", encoding="utf-8")
+
+    result = service.ingest_files(project.id, [source])
+
+    assert result.items[0].status == "error"
+    assert "FTS failure" in result.items[0].message
+    assert vector.chunks == {}
+    assert catalog.list_documents(project.id) == []
+    assert list((settings.projects_dir / project.id / "documents").iterdir()) == []

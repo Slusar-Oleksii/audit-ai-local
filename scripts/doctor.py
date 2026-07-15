@@ -16,6 +16,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def is_directory(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def load_local_env() -> None:
     """Читає прості KEY=VALUE з .env без вимоги до вже встановлених пакетів."""
     path = ROOT / ".env"
@@ -42,7 +49,8 @@ if sys.platform == "win32":
         Path("C:/Program Files/Tesseract-OCR"),
     ]
     os.environ["PATH"] = os.pathsep.join(
-        [str(path) for path in runtime_dirs if path.is_dir()] + [os.environ.get("PATH", "")]
+        [str(path) for path in runtime_dirs if is_directory(path)]
+        + [os.environ.get("PATH", "")]
     )
 local_tessdata = ROOT / ".runtime" / "tessdata"
 if (local_tessdata / "ukr.traineddata").is_file():
@@ -154,8 +162,11 @@ def find_executable(alternatives: list[str]) -> str | None:
         candidate = Path(sys.executable).resolve().parent / (
             f"{item}.exe" if sys.platform == "win32" and not item.endswith(".exe") else item
         )
-        if candidate.exists():
-            return str(candidate)
+        try:
+            if candidate.exists():
+                return str(candidate)
+        except OSError:
+            continue
     return None
 
 

@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from audit_ai.config import Settings, get_settings
+from audit_ai.schemas import AuditReport, AuditRunManifest
 
 
 _UNSAFE_FILENAME = re.compile(r"[^\w.()\- ]+", flags=re.UNICODE)
@@ -93,19 +94,65 @@ class Repository:
         directory = self.project_dir(project_id) / "derived" / "ocr"
         return directory / f"{safe_identifier(document_id, 'ID документа')}.pdf"
 
-    def save_report(self, project_id: str, report_id: str, markdown: str) -> Path:
+    def report_path(self, project_id: str, report_id: str, suffix: str) -> Path:
+        if suffix not in {".md", ".json", ".manifest.json"}:
+            raise ValueError("Непідтримуваний формат артефакту звіту")
         directory = self.project_dir(project_id) / "reports"
         if not directory.is_dir():
             raise FileNotFoundError("Проєкт видалено до завершення аудиту")
-        target = directory / f"{safe_identifier(report_id, 'ID звіту')}.md"
-        temporary = target.with_suffix(".md.tmp")
+        return directory / f"{safe_identifier(report_id, 'ID звіту')}{suffix}"
+
+    def _write_report_artifact(
+        self,
+        project_id: str,
+        report_id: str,
+        suffix: str,
+        content: str,
+    ) -> Path:
+        target = self.report_path(project_id, report_id, suffix)
+        temporary = target.with_name(f"{target.name}.tmp")
         try:
-            temporary.write_text(markdown, encoding="utf-8")
+            temporary.write_text(content, encoding="utf-8")
             temporary.replace(target)
         except Exception:
             temporary.unlink(missing_ok=True)
             raise
         return target
+
+    def save_report(self, project_id: str, report_id: str, markdown: str) -> Path:
+        return self._write_report_artifact(project_id, report_id, ".md", markdown)
+
+    def save_report_json(self, project_id: str, report: AuditReport) -> Path:
+        return self._write_report_artifact(
+            project_id,
+            report.report_id,
+            ".json",
+            report.model_dump_json(indent=2),
+        )
+
+    def save_manifest(self, project_id: str, manifest: AuditRunManifest) -> Path:
+        return self._write_report_artifact(
+            project_id,
+            manifest.report_id,
+            ".manifest.json",
+            manifest.model_dump_json(indent=2),
+        )
+
+    def load_report(self, project_id: str, report_id: str) -> AuditReport:
+        path = self.report_path(project_id, report_id, ".json")
+        if not path.is_file():
+            raise FileNotFoundError("Структурований файл цього звіту відсутній")
+        return AuditReport.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def load_report_markdown(self, project_id: str, report_id: str) -> str:
+        path = self.report_path(project_id, report_id, ".md")
+        if not path.is_file():
+            raise FileNotFoundError("Markdown-файл цього звіту відсутній")
+        return path.read_text(encoding="utf-8")
+
+    def delete_report_artifacts(self, project_id: str, report_id: str) -> None:
+        for suffix in (".md", ".json", ".manifest.json"):
+            self.report_path(project_id, report_id, suffix).unlink(missing_ok=True)
 
     def delete_document_files(self, project_id: str, document_id: str) -> None:
         safe_document_id = safe_identifier(document_id, "ID документа")

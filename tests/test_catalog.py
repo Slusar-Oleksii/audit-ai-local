@@ -1,4 +1,5 @@
 import sqlite3
+import uuid
 from datetime import UTC, datetime
 
 from audit_ai.catalog import Catalog
@@ -87,3 +88,16 @@ def test_catalog_migrates_documents_from_previous_schema(settings, tmp_path):
     assert record is not None
     assert record.index_signature == ""
     assert record.collection_name == "audit_chunks_qwen3_06b_v1"
+
+
+def test_report_history_is_project_isolated(settings, tmp_path):
+    catalog = Catalog(settings)
+    first = catalog.create_project("A")
+    second = catalog.create_project("B")
+    first_report = str(uuid.uuid4())
+    second_report = str(uuid.uuid4())
+    catalog.add_report(first_report, first.id, "technical", "Перевір код", tmp_path / "a.md")
+    catalog.add_report(second_report, second.id, "legal", "Перевір договір", tmp_path / "b.md")
+
+    assert [item.id for item in catalog.list_reports(first.id)] == [first_report]
+    assert catalog.get_report(second_report).project_id == second.id

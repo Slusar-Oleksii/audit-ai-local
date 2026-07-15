@@ -159,10 +159,57 @@ class RetrievalHit(BaseModel):
 class SourceRef(BaseModel):
     source_id: str
     chunk_id: str
+    document_id: str = ""
     file_name: str
     location: str
     score: float
     excerpt: str
+    content: str = ""
+    retrieval_methods: list[str] = Field(default_factory=list)
+
+
+class DocumentSnapshot(BaseModel):
+    document_id: str
+    file_name: str
+    checksum: str
+
+
+class SelectedChunk(BaseModel):
+    source_id: str
+    chunk_id: str
+    document_id: str
+    retrieval_methods: list[str] = Field(default_factory=list)
+    fused_score: float
+
+
+class AuditRunManifest(BaseModel):
+    report_id: str
+    project_id: str
+    generated_at: datetime
+    query: str
+    profile: AuditProfile
+    llm_model: str
+    embedding_model: str
+    prompt_version: str
+    index_signature: str
+    collection_name: str
+    retrieval_strategy: str
+    retrieval_queries: list[str]
+    documents: list[DocumentSnapshot]
+    selected_chunks: list[SelectedChunk]
+
+
+class ReportRecord(BaseModel):
+    id: str
+    project_id: str
+    profile: AuditProfile
+    query: str
+    stored_path: Path
+    json_path: Path | None = None
+    manifest_path: Path | None = None
+    model: str = ""
+    index_signature: str = ""
+    created_at: datetime
 
 
 class AuditFinding(BaseModel):
@@ -198,3 +245,4 @@ class AuditReport(AuditDraft):
     sources: list[SourceRef] = Field(default_factory=list)
     model: str
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    manifest: AuditRunManifest | None = None

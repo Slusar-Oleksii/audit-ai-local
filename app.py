@@ -15,6 +15,7 @@ from audit_ai.llm import LLMClient
 from audit_ai.profiles import PROFILE_LABELS
 from audit_ai.rag import AuditService
 from audit_ai.reporting import render_markdown, sanitize_markdown_for_display
+from audit_ai.repository import Repository
 from audit_ai.schemas import AuditProfile, AuditRequest
 
 
@@ -380,6 +381,11 @@ def audit_service() -> AuditService:
     return AuditService(get_settings(), catalog=catalog())
 
 
+@st.cache_resource
+def repository() -> Repository:
+    return Repository(get_settings())
+
+
 @st.cache_data(ttl=15, show_spinner=False)
 def readiness() -> dict[str, bool | str]:
     settings = get_settings()
@@ -514,7 +520,7 @@ def render_sidebar() -> str | None:
     if not projects:
         st.sidebar.info("Створіть перший проєкт, щоб завантажити документи.")
         create_project_form(expanded=True)
-        st.sidebar.caption("Локальний режим · v0.1.0")
+        st.sidebar.caption("Локальний режим · Trust Layer v0.2.0")
         return None
 
     project_ids = [project.id for project in projects]
@@ -612,7 +618,7 @@ def render_sidebar() -> str | None:
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))
-    st.sidebar.caption("Локальний режим · v0.1.0")
+    st.sidebar.caption("Локальний режим · Trust Layer v0.2.0")
     return selected
 
 
@@ -769,6 +775,59 @@ with st.container(key="step-report"):
         "Сформуйте звіт",
         "Перегляньте висновки, звірте джерела та експортуйте результат.",
     )
+    report_records = catalog().list_reports(project_id)
+    with st.expander(
+        f"Історія звітів · {len(report_records)}",
+        icon=":material/history:",
+    ):
+        if report_records:
+            report_ids = [record.id for record in report_records]
+            selected_report_id = st.selectbox(
+                "Збережені звіти",
+                report_ids,
+                format_func=lambda report_id: next(
+                    (
+                        f"{record.created_at.astimezone().strftime('%d.%m.%Y %H:%M')} · "
+                        f"{PROFILE_LABELS[record.profile]} · {record.query[:72]}"
+                    )
+                    for record in report_records
+                    if record.id == report_id
+                ),
+                key=f"report-history-{project_id}",
+                label_visibility="collapsed",
+            )
+            if st.button(
+                "Відкрити збережений звіт",
+                key=f"open-report-{project_id}",
+                icon=":material/open_in_new:",
+            ):
+                try:
+                    historical_markdown = repository().load_report_markdown(
+                        project_id, selected_report_id
+                    )
+                    try:
+                        historical_report = repository().load_report(
+                            project_id, selected_report_id
+                        )
+                        st.session_state["report"] = historical_report.model_dump(mode="json")
+                    except FileNotFoundError:
+                        record = next(
+                            item for item in report_records if item.id == selected_report_id
+                        )
+                        st.session_state["report"] = {
+                            "report_id": record.id,
+                            "query": record.query,
+                            "profile": record.profile.value,
+                            "findings": [],
+                            "sources": [],
+                        }
+                    st.session_state["report_markdown"] = historical_markdown
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Не вдалося відкрити звіт: {exc}")
+        else:
+            st.caption("Збережених звітів у цьому проєкті ще немає.")
+
     markdown = st.session_state.get("report_markdown")
     if markdown:
         report_state = st.session_state.get("report") or {}
@@ -786,8 +845,56 @@ with st.container(key="step-report"):
                 icon=":material/download:",
                 use_container_width=True,
             )
-        with st.container(border=True):
-            st.markdown(sanitize_markdown_for_display(markdown))
+        report_tab, sources_tab, manifest_tab = st.tabs(
+            ["Звіт", f"Джерела ({source_count})", "Паспорт запуску"]
+        )
+        with report_tab:
+            with st.container(border=True):
+                st.markdown(sanitize_markdown_for_display(markdown))
+        with sources_tab:
+            sources = report_state.get("sources") or []
+            if not sources:
+                st.info("Для старого звіту точні фрагменти джерел не були збережені.")
+            for source in sources:
+                methods = ", ".join(source.get("retrieval_methods") or []) or "retrieval"
+                with st.expander(
+                    f"[{source.get('source_id', '?')}] {source.get('file_name', 'джерело')} · "
+                    f"{source.get('location', 'місце не вказано')}"
+                ):
+                    st.caption(
+                        f"Метод: {methods} · fused score: {float(source.get('score', 0.0)):.5f} · "
+                        f"chunk: {source.get('chunk_id', '—')}"
+                    )
+                    st.code(
+                        source.get("content") or source.get("excerpt") or "Фрагмент відсутній",
+                        language=None,
+                        wrap_lines=True,
+                    )
+        with manifest_tab:
+            manifest = report_state.get("manifest") or {}
+            if not manifest:
+                st.info("Технічний паспорт доступний для звітів Trust Layer v0.2 і новіших.")
+            else:
+                passport_left, passport_right = st.columns(2)
+                with passport_left:
+                    st.metric("Документи", len(manifest.get("documents") or []))
+                    st.caption(f"LLM: {manifest.get('llm_model', '—')}")
+                    st.caption(f"Embeddings: {manifest.get('embedding_model', '—')}")
+                with passport_right:
+                    st.metric("Відібрані chunks", len(manifest.get("selected_chunks") or []))
+                    st.caption(f"Пошук: {manifest.get('retrieval_strategy', '—')}")
+                    st.caption(f"Prompt: {manifest.get('prompt_version', '—')}")
+                st.markdown("**Пошукові формулювання**")
+                for retrieval_query in manifest.get("retrieval_queries") or []:
+                    st.write(f"• {retrieval_query}")
+                with st.expander("Знімок документів і checksum"):
+                    for document in manifest.get("documents") or []:
+                        st.code(
+                            f"{document.get('file_name', '—')}\n"
+                            f"document_id: {document.get('document_id', '—')}\n"
+                            f"sha256: {document.get('checksum', '—')}",
+                            language=None,
+                        )
     else:
         st.markdown(
             '<div class="audit-report-empty">'

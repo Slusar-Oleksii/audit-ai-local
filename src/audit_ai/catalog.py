@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 from audit_ai.config import Settings, get_settings
-from audit_ai.schemas import DocumentRecord, ProjectRecord
+from audit_ai.schemas import DocumentRecord, ProjectRecord, ReportRecord
 
 
 def _utc_now() -> str:
@@ -92,6 +92,18 @@ class Catalog:
                     "ALTER TABLE documents ADD COLUMN collection_name TEXT NOT NULL "
                     "DEFAULT 'audit_chunks_qwen3_06b_v1'"
                 )
+            report_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(reports)").fetchall()
+            }
+            for name, definition in (
+                ("json_path", "TEXT"),
+                ("manifest_path", "TEXT"),
+                ("model", "TEXT NOT NULL DEFAULT ''"),
+                ("index_signature", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if name not in report_columns:
+                    connection.execute(f"ALTER TABLE reports ADD COLUMN {name} {definition}")
 
     def create_project(self, name: str) -> ProjectRecord:
         cleaned = " ".join(name.split())
@@ -213,12 +225,55 @@ class Catalog:
         with self.connection() as connection:
             connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
 
-    def add_report(self, report_id: str, project_id: str, profile: str, query: str, path: Path) -> None:
+    def add_report(
+        self,
+        report_id: str,
+        project_id: str,
+        profile: str,
+        query: str,
+        path: Path,
+        *,
+        json_path: Path | None = None,
+        manifest_path: Path | None = None,
+        model: str = "",
+        index_signature: str = "",
+        created_at: datetime | None = None,
+    ) -> ReportRecord:
         with self.connection() as connection:
             connection.execute(
-                "INSERT INTO reports(id, project_id, profile, query, stored_path, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (report_id, project_id, profile, query, str(path), _utc_now()),
+                """
+                INSERT INTO reports(
+                    id, project_id, profile, query, stored_path, json_path,
+                    manifest_path, model, index_signature, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    project_id,
+                    profile,
+                    query,
+                    str(path),
+                    str(json_path) if json_path else None,
+                    str(manifest_path) if manifest_path else None,
+                    model,
+                    index_signature,
+                    (created_at or datetime.now(UTC)).isoformat(),
+                ),
             )
+        return self.get_report(report_id)  # type: ignore[return-value]
+
+    def list_reports(self, project_id: str) -> list[ReportRecord]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM reports WHERE project_id = ? ORDER BY created_at DESC",
+                (project_id,),
+            ).fetchall()
+        return [self._report(row) for row in rows if row is not None]  # type: ignore[misc]
+
+    def get_report(self, report_id: str) -> ReportRecord | None:
+        with self.connection() as connection:
+            row = connection.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+        return self._report(row)
 
     @staticmethod
     def _document(row: sqlite3.Row | None) -> DocumentRecord | None:
@@ -227,3 +282,15 @@ class Catalog:
         data = dict(row)
         data["stored_path"] = Path(data["stored_path"])
         return DocumentRecord(**data)
+
+    @staticmethod
+    def _report(row: sqlite3.Row | None) -> ReportRecord | None:
+        if row is None:
+            return None
+        data = dict(row)
+        data["stored_path"] = Path(data["stored_path"])
+        data["json_path"] = Path(data["json_path"]) if data.get("json_path") else None
+        data["manifest_path"] = (
+            Path(data["manifest_path"]) if data.get("manifest_path") else None
+        )
+        return ReportRecord(**data)
