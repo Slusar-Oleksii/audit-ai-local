@@ -48,7 +48,11 @@ APP_CSS = """
   font-family: "Segoe UI", Inter, system-ui, -apple-system, sans-serif;
 }
 header[data-testid="stHeader"] { background: transparent; }
-[data-testid="stToolbar"], [data-testid="stDecoration"] { display: none !important; }
+[data-testid="stToolbar"] { background: transparent; }
+[data-testid="stToolbarActions"],
+[data-testid="stAppDeployButton"],
+[data-testid="stMainMenu"],
+[data-testid="stDecoration"] { display: none !important; }
 .block-container {
   max-width: 1320px;
   padding: 1rem 2.35rem 4rem;
